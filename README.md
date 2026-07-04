@@ -18,9 +18,11 @@ Claude Code를 다단계 워크플로우로 구동해, 프로젝트를 **스텝 
 │   ├── commands/
 │   │   ├── harness.md     # /harness — 스텝 설계 워크플로우
 │   │   └── review.md      # /review  — 변경사항 리뷰
-│   └── settings.json      # 훅 (Stop: lint/build/test, PreToolUse: 위험 명령 차단)
+│   └── settings.json      # 훅 (Stop: lint/build/test, PreToolUse: 위험 명령 차단 · TDD 가드)
 ├── scripts/
 │   ├── execute.py         # 스텝 순차 실행기 (가드레일 주입 · 자가 교정 하네스)
+│   ├── hooks/
+│   │   └── tdd-guard.sh   # PreToolUse[Edit|Write] — 테스트 없는 소스 편집 차단
 │   └── test_execute.py    # execute.py 테스트
 └── phases/                # (런타임 생성) task · step 정의
 ```
@@ -59,6 +61,25 @@ python3 scripts/execute.py {task-name} --push    # 실행 후 origin에 push
 | 2단계 커밋 | 코드 변경(`feat`)과 메타데이터(`chore`)를 분리 커밋 |
 | 상태 기록 | `started_at` · `completed_at` · `failed_at` · `blocked_at` 자동 기록 |
 
+## 자동 가드레일 — 훅
+
+문서가 "무엇을 만들지"를 안내한다면, `.claude/settings.json`의 훅은 "규칙 위반을 애초에 막는" 하드 가드다.
+
+| 훅 | 시점 | 동작 |
+|----|------|------|
+| **TDD 가드** | `PreToolUse[Edit\|Write]` | 소스 파일을 편집/작성하려 할 때 대응 테스트 파일이 없으면 **차단**(`deny`). 테스트를 먼저 쓰도록 강제한다. |
+| 위험 명령 차단 | `PreToolUse[Bash]` | `rm -rf`, `git push --force`, `git reset --hard`, `DROP TABLE` 등을 차단한다. |
+| 완료 검증 | `Stop` | 세션 종료 시 `lint` · `build` · `test`를 실행한다. |
+
+### TDD 가드 (`scripts/hooks/tdd-guard.sh`)
+
+`.ts` / `.tsx` / `.js` / `.jsx` 소스를 편집하려 할 때, 대응 테스트(`{이름}.test.ts`, `__tests__/{이름}.test.ts`, `src/__tests__/{이름}.test.ts`)가 먼저 존재하는지 확인하고, 없으면 편집을 거부한다.
+
+- **비대상 (통과)**: 테스트 파일 자체, `.claude/`·`workflows/`, 설정·문서·타입 파일(`*.json`, `*.md`, `*/types/*` 등), Next.js 프레임워크 파일(`layout`·`page`·`globals.css` 등).
+- **비활성 조건**: 프로젝트 루트에 `package.json`이 없으면(스캐폴딩 전 부트스트랩 단계) 건너뛴다.
+- **강제력**: `deny`는 권한 시스템과 별개 레이어라 `execute.py`의 `--dangerously-skip-permissions` 헤드리스 실행에서도 우회되지 않는다 — 자동 실행 경로에서도 test-first가 강제된다.
+- **의존성**: `jq`. 없으면 가드가 조용히 통과(fail-open)하니 주의.
+
 ## 상태 & 에러 복구
 
 각 step의 `status`는 `pending` | `completed` | `error` | `blocked` 중 하나다.
@@ -74,6 +95,7 @@ python3 scripts/execute.py {task-name} --push    # 실행 후 origin에 push
 
 - `claude` CLI — 헤드리스 실행(`claude -p`)에 사용
 - Python 3 — 표준 라이브러리만 사용 (외부 의존성 없음)
+- `jq` — TDD 가드 훅이 훅 입력(JSON) 파싱에 사용
 - `pytest` — 하네스 테스트 실행용
 
 ## 테스트
